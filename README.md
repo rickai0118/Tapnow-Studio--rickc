@@ -147,6 +147,3 @@ Tapnow Studio 展示了现代前端技术在无构建工具（No-Build）环境�
 
 查看完整协议：[LICENSE](./LICENSE)
 
-## 📄 开源协议 (License)
-
-[MIT License](LICENSE)
