@@ -294,6 +294,7 @@
             // Chat Models
             { id: 'gemini-3-pro', provider: 'Gemini 3 Pro', modelName: 'gemini-3-pro-preview', type: 'Chat', key: '', url: DEFAULT_BASE_URL },
             { id: 'gpt-5-1', provider: 'GPT 5.1', modelName: 'gpt-5.1', type: 'Chat', key: '', url: DEFAULT_BASE_URL },
+            { id: 'gpt-5-2', provider: 'GPT 5.2', modelName: 'gpt-5.2', type: 'Chat', key: '', url: DEFAULT_BASE_URL },
             { id: 'deepseek-v3', provider: 'DeepSeek V3', modelName: 'deepseek-v3-1-250821', type: 'Chat', key: '', url: DEFAULT_BASE_URL },
             { id: 'gpt-4o', provider: 'GPT-4o', modelName: 'gpt-4o', type: 'Chat', key: '', url: DEFAULT_BASE_URL },
             
@@ -763,6 +764,16 @@
                 const saved = localStorage.getItem('tapnow_api_configs');
                 let configs = saved ? JSON.parse(saved) : DEFAULT_API_CONFIGS;
                 
+                // 确保 gpt-5.2 存在（如果不存在则添加）
+                const hasGpt52 = configs.some(c => c.id === 'gpt-5-2');
+                if (!hasGpt52) {
+                    // 找到 gpt-5-1 的位置，在它后面插入 gpt-5-2
+                    const gpt51Index = configs.findIndex(c => c.id === 'gpt-5-1');
+                    const insertIndex = gpt51Index >= 0 ? gpt51Index + 1 : configs.findIndex(c => c.type === 'Chat' && c.id === 'deepseek-v3');
+                    const finalIndex = insertIndex >= 0 ? insertIndex : configs.length;
+                    configs.splice(finalIndex, 0, { id: 'gpt-5-2', provider: 'GPT 5.2', modelName: 'gpt-5.2', type: 'Chat', key: '', url: DEFAULT_BASE_URL });
+                }
+                
                 // 过滤掉jimeng-4.5配置（如果存在）
                 configs = configs.filter(c => c.id !== 'jimeng-4.5');
                 
@@ -925,6 +936,7 @@
             const [historyContextMenu, setHistoryContextMenu] = useState({ visible: false, x: 0, y: 0, worldX: 0, worldY: 0, item: null });
             const [frameContextMenu, setFrameContextMenu] = useState({ visible: false, x: 0, y: 0, nodeId: null, frame: null });
             const [previewContextMenu, setPreviewContextMenu] = useState({ visible: false, x: 0, y: 0, item: null });
+            const [inputImageContextMenu, setInputImageContextMenu] = useState({ visible: false, x: 0, y: 0, nodeId: null });
             const [settingsOpen, setSettingsOpen] = useState(false);
             const [historyOpen, setHistoryOpen] = useState(false);
             const [batchModalOpen, setBatchModalOpen] = useState(false);
@@ -6887,7 +6899,7 @@
                     }
                     
                     setNodes(prev => [...prev, ...newNodes]);
-                    alert('九宫格图片已成功切割并添加到画布！');
+                    // 静默创建，不显示成功提示
                 } catch (error) {
                     alert('切割失败: ' + error.message);
                 }
@@ -6902,6 +6914,7 @@
                     spacing = 20,
                     nodeWidth = 260,
                     nodeHeight = 260,
+                    replaceSelected = false, // 是否替换已选中的节点
                 } = options;
 
                 try {
@@ -6910,6 +6923,32 @@
                         alert('切割失败：未能生成9张图片');
                         return;
                     }
+
+                    // 检查是否有框选的节点需要替换
+                    const currentSelectedIds = selectedNodeIdsRef.current;
+                    if (replaceSelected && currentSelectedIds && currentSelectedIds.size === 9) {
+                        // 替换模式：更新已选中的9个节点
+                        const selectedIdsArray = Array.from(currentSelectedIds);
+                        setNodes(prev => prev.map(node => {
+                            const index = selectedIdsArray.indexOf(node.id);
+                            if (index !== -1 && index < croppedImages.length) {
+                                // 替换节点内容，保持位置和大小
+                                return {
+                                    ...node,
+                                    content: croppedImages[index].url,
+                                    dimensions: { 
+                                        w: croppedImages[index].width, 
+                                        h: croppedImages[index].height 
+                                    }
+                                };
+                            }
+                            return node;
+                        }));
+                        // 静默替换，不显示提示
+                        return;
+                    }
+
+                    // 创建新节点模式（原有逻辑）
                     const world = screenToWorld(window.innerWidth / 2, window.innerHeight / 2);
                     const startX = originX !== undefined ? originX : world.x;
                     const startY = originY !== undefined ? originY : world.y;
@@ -6931,6 +6970,7 @@
                         });
                     }
                     setNodes(prev => [...prev, ...newNodes]);
+                    // 静默创建，不显示成功提示
                 } catch (e) {
                     alert('切割失败: ' + e.message);
                 }
@@ -7723,6 +7763,42 @@
                 closePreviewContextMenu();
             };
 
+            // 图片输入节点右键菜单处理
+            const handleInputImageRightClick = (e, nodeId) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const node = nodes.find(n => n.id === nodeId);
+                if (!node || !node.content) return;
+                setInputImageContextMenu({ visible: true, x: e.clientX, y: e.clientY, nodeId });
+            };
+
+            const closeInputImageContextMenu = () => {
+                setInputImageContextMenu({ visible: false, x: 0, y: 0, nodeId: null });
+            };
+
+            const sendInputImageToChat = () => {
+                const nodeId = inputImageContextMenu.nodeId;
+                const node = nodes.find(n => n.id === nodeId);
+                if (!node || !node.content) return;
+                
+                const isImage = !isVideoUrl(node.content);
+                const isVideo = isVideoUrl(node.content);
+                const fileExt = isImage ? 'png' : 'mp4';
+                const mimeType = isImage ? 'image/png' : 'video/mp4';
+                const newFile = { 
+                    name: `InputImage-${Date.now()}.${fileExt}`, 
+                    type: mimeType, 
+                    content: node.content, 
+                    isImage, 
+                    isVideo, 
+                    isAudio: false, 
+                    fileExt 
+                };
+                setChatFiles(prev => [...prev, newFile]);
+                setIsChatOpen(true);
+                closeInputImageContextMenu();
+            };
+
             // ... (rest of render logic unchanged) ...
             // 使用 useMemo 优化连接线渲染函数，避免重复查找和计算
             const renderConnections = useMemo(() => {
@@ -8093,6 +8169,7 @@
                                     onDrop={(e) => handleDrop(node.id, e)}
                                     onDragOver={handleDragOver}
                                     onDragLeave={handleDragLeave}
+                                    onContextMenu={(e) => handleInputImageRightClick(e, node.id)}
                                 >
                                     {node.content ? (
                                         <div className="relative w-full h-full">
@@ -10715,12 +10792,79 @@
                                         onClick={() => {
                                             const item = previewContextMenu.item;
                                             if (item?.url) {
-                                                const source = item.sourceNode;
-                                                const originX = source ? source.x + source.width + 20 : undefined;
-                                                const originY = source ? source.y : undefined;
-                                                handleSplitGridFromUrl(item.url, { originX, originY });
+                                                // 检查是否有框选的节点，且数量正好是9个
+                                                const currentSelectedIds = selectedNodeIdsRef.current;
+                                                const hasSelectedNodes = currentSelectedIds && currentSelectedIds.size === 9;
+                                                
+                                                if (hasSelectedNodes) {
+                                                    // 替换模式：直接替换已选中的9个节点
+                                                    handleSplitGridFromUrl(item.url, { replaceSelected: true });
+                                                } else {
+                                                    // 创建新节点模式：在源节点旁边创建
+                                                    const source = item.sourceNode;
+                                                    const originX = source ? source.x + source.width + 20 : undefined;
+                                                    const originY = source ? source.y : undefined;
+                                                    handleSplitGridFromUrl(item.url, { originX, originY });
+                                                }
                                             }
                                             closePreviewContextMenu();
+                                        }}
+                                    >
+                                        <Scissors size={14} className="text-blue-500" /> 九宫格裁切
+                                    </button>
+                                </div>
+                            )}
+
+                            {inputImageContextMenu.visible && (
+                                <div
+                                    className={`fixed z-[110] w-48 rounded-lg shadow-2xl py-1 animate-in fade-in duration-100 border ${
+                                        theme === 'dark' ? 'bg-[#18181b] border-zinc-700' : 'bg-white border-zinc-200'
+                                    }`}
+                                    style={{ left: inputImageContextMenu.x, top: inputImageContextMenu.y }}
+                                    onMouseLeave={closeInputImageContextMenu}
+                                >
+                                    <div
+                                        className={`px-3 py-1.5 text-[10px] font-medium border-b mb-1 ${
+                                            theme === 'dark' ? 'text-zinc-500 border-zinc-800' : 'text-zinc-500 border-zinc-200'
+                                        }`}
+                                    >
+                                        操作
+                                    </div>
+                                    <button
+                                        className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2 transition-colors ${
+                                            theme === 'dark'
+                                                ? 'text-zinc-300 hover:bg-zinc-800'
+                                                : 'text-zinc-700 hover:bg-zinc-100'
+                                        }`}
+                                        onClick={sendInputImageToChat}
+                                    >
+                                        <MessageSquare size={14} className="text-purple-500" /> 发送到当前对话
+                                    </button>
+                                    <button
+                                        className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2 transition-colors ${
+                                            theme === 'dark'
+                                                ? 'text-zinc-300 hover:bg-zinc-800'
+                                                : 'text-zinc-700 hover:bg-zinc-100'
+                                        }`}
+                                        onClick={() => {
+                                            const nodeId = inputImageContextMenu.nodeId;
+                                            const node = nodes.find(n => n.id === nodeId);
+                                            if (!node || !node.content) return;
+                                            
+                                            // 检查是否有框选的节点，且数量正好是9个
+                                            const currentSelectedIds = selectedNodeIdsRef.current;
+                                            const hasSelectedNodes = currentSelectedIds && currentSelectedIds.size === 9;
+                                            
+                                            if (hasSelectedNodes) {
+                                                // 替换模式：直接替换已选中的9个节点
+                                                handleSplitGridFromUrl(node.content, { replaceSelected: true });
+                                            } else {
+                                                // 创建新节点模式：在源节点旁边创建
+                                                const originX = node.x + node.width + 20;
+                                                const originY = node.y;
+                                                handleSplitGridFromUrl(node.content, { originX, originY });
+                                            }
+                                            closeInputImageContextMenu();
                                         }}
                                     >
                                         <Scissors size={14} className="text-blue-500" /> 九宫格裁切
